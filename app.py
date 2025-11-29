@@ -81,7 +81,8 @@ STUDENT_RECORDS = {
 st.title("📊 연도별 CSV 통합 분석 시스템")
 
 # (1) 데이터 로드: 파일 리스트를 직접 지정하거나, glob으로 찾을 수 있음
-target_files = ['data/keyword/2016년 키워드.csv', 'data/keyword/2017년 키워드.csv', 'data/keyword/2018년 키워드.csv']
+target_files = ['data/keyword/2016년 키워드.csv', 'data/keyword/2017년 키워드.csv', 'data/keyword/2018년 키워드.csv', 'data/keyword/2021년 키워드.csv'
+                ,'data/keyword/2022년 키워드.csv', 'data/keyword/2023년 키워드.csv', 'data/keyword/2024년 키워드.csv']
 # 만약 파일이 더 많다면 아래 주석을 풀어서 자동으로 찾게 할 수도 있습니다.
 # target_files = glob.glob("*년 키워드.csv") 
 
