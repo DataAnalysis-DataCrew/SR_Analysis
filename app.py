@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-import glob # 파일 목록을 찾기 위해 사용
+import glob
+import os
 
 # ---------------------------------------------------------
 # 1. 기본 설정 및 한글 폰트
 # ---------------------------------------------------------
-st.set_page_config(page_title="연도별 통합 트렌드 분석", layout="wide")
+st.set_page_config(page_title="통합 생기부 트렌드 매칭 시스템", layout="wide")
 
 try:
     plt.rcParams['font.family'] = 'Malgun Gothic'
@@ -16,165 +17,219 @@ except:
 plt.rcParams['axes.unicode_minus'] = False
 
 # ---------------------------------------------------------
-# 2. 데이터 로드 (여러 CSV 파일 통합 기능 추가)
+# 2. 키워드 데이터 로드 (모든 연도 통합)
 # ---------------------------------------------------------
 @st.cache_data
-def load_all_data(file_list):
+def load_keyword_data():
+    # 1. 파일 찾기 (현재 폴더 및 data/keyword 폴더)
+    files_in_root = glob.glob("*년 키워드.csv")
+    files_in_data = glob.glob("data/keyword/*년 키워드.csv")
+    all_files = files_in_root + files_in_data
+    
     all_dfs = []
     
-    for file_path in file_list:
+    for filename in all_files:
         try:
-            df = pd.read_csv(file_path)
+            df = pd.read_csv(filename)
             
-            # 결측치 제거 (빈 줄 삭제)
-            df = df.dropna(subset=['Date', 'Keyword', 'Count'])
-            
-            # 날짜 변환 함수 (두 가지 형식 모두 지원)
+            # 날짜 파싱 (키워드 파일용: 년-월 or 월-년)
             def parse_date(date_str):
-                try:
-                    # 1. '16-Mar' (년-월) 형식
-                    return pd.to_datetime(date_str, format='%y-%b')
-                except:
-                    try:
-                        # 2. 'Sep-16' (월-년) 형식
-                        return pd.to_datetime(date_str, format='%b-%y')
-                    except:
-                        return pd.NaT
+                try: return pd.to_datetime(date_str, format='%y-%b') # 16-Mar
+                except: 
+                    try: return pd.to_datetime(date_str, format='%b-%y') # Sep-16
+                    except: return pd.NaT
 
             df['Date_Parsed'] = df['Date'].apply(parse_date)
-            df = df.dropna(subset=['Date_Parsed']) # 날짜 변환 실패 행 제거
+            df = df.dropna(subset=['Date_Parsed'])
+            
+            # 태그 컬럼 정제
+            if 'tag' in df.columns:
+                df['tag'] = df['tag'].fillna('').astype(str).str.strip()
+                df.loc[df['tag'] == '', 'tag'] = None
+                df.loc[df['tag'] == 'nan', 'tag'] = None
+            else:
+                df['tag'] = None
             
             all_dfs.append(df)
-            
         except Exception as e:
-            st.error(f"'{file_path}' 로드 중 오류: {e}")
+            st.error(f"키워드 파일 로드 오류 ({filename}): {e}")
             
     if all_dfs:
-        # 모든 연도의 데이터를 하나로 합치기
         return pd.concat(all_dfs, ignore_index=True)
     else:
         return pd.DataFrame()
 
 # ---------------------------------------------------------
-# 3. 학생 생기부 매핑 데이터 (필요 시 수정/추가)
+# 3. 생기부 데이터 로드 (모든 학생 통합) - [수정됨]
 # ---------------------------------------------------------
-STUDENT_RECORDS = {
-    # 2016년
-    "알파고": "2016-09-15",
-    "포켓몬GO": "2016-10-20", 
-    "경주 지진": "2016-11-01",
-    "가습기 살균제": "2016-05-20",
-    # 2017년
-    "4차산업혁명": "2017-09-10",
-    "미세먼지": "2017-05-15",
-    "비트코인": "2018-01-20", # 시차가 해를 넘길 수도 있음
-    "포항 지진": "2017-11-20",
-    # 2018년
-    "남북회담": "2018-05-01",
-    "평창 올림픽": "2018-03-10",
-    "BMW 화재": "2018-09-01"
-}
+@st.cache_data
+def load_all_student_data():
+    # 현재 폴더 및 하위 폴더 탐색
+    student_files = glob.glob("*생기부*.csv") + glob.glob("data/shcool_record/*생기부*.csv")
+    
+    all_students = []
+    
+    for filepath in student_files:
+        try:
+            df = pd.read_csv(filepath)
+            
+            filename = os.path.basename(filepath)
+            student_name = filename.split('_')[0] 
+            
+            col_rename_map = {
+                'ketworad': 'Keyword', 'Activiy': 'Activity',
+                'category': 'Category', 'content': 'Content'
+            }
+            df = df.rename(columns=col_rename_map)
+            
+            required_cols = ['Date', 'Keyword', 'Category', 'Activity', 'Content']
+            for col in required_cols:
+                if col not in df.columns: df[col] = ''
+
+            # [수정] 날짜 파싱 로직 업데이트 (일-월-년 우선 적용)
+            def parse_student_date(date_str):
+                # 1. 일-월-년 (예: 20-Dec-20 -> 2020-12-20)
+                try: return pd.to_datetime(date_str, format='%d-%b-%y')
+                except:
+                    # 2. 기존 포맷 폴백 (혹시 다른 파일이 예전 형식일 경우 대비)
+                    try: return pd.to_datetime(date_str, format='%y-%b')
+                    except: 
+                        try: return pd.to_datetime(date_str, format='%b-%y')
+                        except: return pd.NaT
+            
+            df['Date_Parsed'] = df['Date'].apply(parse_student_date)
+            
+            # 날짜 변환 실패한 행 확인 (디버깅용)
+            if df['Date_Parsed'].isna().any():
+                failed_rows = df[df['Date_Parsed'].isna()]['Date'].unique()
+                print(f"Warning: {filename}에서 날짜 변환 실패: {failed_rows}")
+
+            df['Year'] = df['Date_Parsed'].dt.year
+            df['StudentName'] = student_name 
+            
+            # 태그 컬럼 정제
+            if 'tag' in df.columns:
+                df['tag'] = df['tag'].fillna('').astype(str).str.strip()
+                df.loc[df['tag'] == '', 'tag'] = None
+                df.loc[df['tag'] == 'nan', 'tag'] = None
+            else:
+                df['tag'] = None
+
+            all_students.append(df)
+            
+        except Exception as e:
+            st.error(f"학생 파일 로드 오류 ({filepath}): {e}")
+            
+    if all_students:
+        return pd.concat(all_students, ignore_index=True)
+    else:
+        return pd.DataFrame()
 
 # ---------------------------------------------------------
 # 4. 메인 앱 로직
 # ---------------------------------------------------------
-st.title("📊 연도별 CSV 통합 분석 시스템")
+st.title("📊 통합 키워드 트렌드 & 생기부 매칭 분석")
+st.markdown("---")
 
-# (1) 데이터 로드: 파일 리스트를 직접 지정하거나, glob으로 찾을 수 있음
-target_files = ['data/keyword/2016년 키워드.csv', 'data/keyword/2017년 키워드.csv', 'data/keyword/2018년 키워드.csv', 'data/keyword/2021년 키워드.csv'
-                ,'data/keyword/2022년 키워드.csv', 'data/keyword/2023년 키워드.csv', 'data/keyword/2024년 키워드.csv']
-# 만약 파일이 더 많다면 아래 주석을 풀어서 자동으로 찾게 할 수도 있습니다.
-# target_files = glob.glob("*년 키워드.csv") 
+keyword_df = load_keyword_data()
+student_df = load_all_student_data()
 
-df = load_all_data(target_files)
-
-if not df.empty:
-    # (2) 사이드바: 카테고리 선택
+if keyword_df.empty:
+    st.error("키워드 데이터 파일(*년 키워드.csv)을 찾을 수 없습니다.")
+elif student_df.empty:
+    st.error("생기부 데이터 파일(*생기부*.csv)을 찾을 수 없습니다.")
+else:
+    # 사이드바
     st.sidebar.header("🔍 분석 옵션")
+    categories = keyword_df['Category'].unique()
+    selected_category = st.sidebar.selectbox("분석할 카테고리", categories)
     
-    categories = df['Category'].unique()
-    selected_category = st.sidebar.selectbox("분석할 카테고리 선택", categories)
+    student_names = ["전체 학생 보기"] + list(student_df['StudentName'].unique())
+    selected_student = st.sidebar.selectbox("학생 필터", student_names)
     
-    # 해당 카테고리 데이터만 추출
-    category_df = df[df['Category'] == selected_category]
+    if selected_student != "전체 학생 보기":
+        target_student_df = student_df[student_df['StudentName'] == selected_student]
+    else:
+        target_student_df = student_df
+    
+    # 메인 화면
+    category_df = keyword_df[keyword_df['Category'] == selected_category]
     keywords_in_category = category_df['Keyword'].unique()
     
-    st.header(f"📂 [{selected_category}] 분야 키워드별 상세 분석")
-    st.caption(f"총 {len(keywords_in_category)}개의 이슈가 발견되었습니다.")
+    st.header(f"📂 [{selected_category}] 분야 트렌드 분석")
+    st.caption(f"선택된 학생: **{selected_student}** | 키워드 수: {len(keywords_in_category)}개")
 
-    # (3) 키워드별로 그래프 따로 그리기 (반복문)
     for kw in keywords_in_category:
-        st.markdown("---") # 구분선
+        st.markdown("###") 
         
-        # 특정 키워드 데이터 추출 및 정렬
         subset = category_df[category_df['Keyword'] == kw].sort_values('Date_Parsed')
-        
-        # 데이터가 비어있지 않은지 확인
-        if subset.empty:
-            continue
+        if subset.empty: continue
             
-        # 레이아웃: 왼쪽(그래프) / 오른쪽(설명)
+        peak_date = subset.loc[subset['Count'].idxmax(), 'Date_Parsed']
+        keyword_year = peak_date.year
+        
+        valid_tags = subset['tag'].dropna().unique()
+        current_kw_tag = valid_tags[0] if len(valid_tags) > 0 else None
+        
         col1, col2 = st.columns([3, 1])
         
         with col1:
             fig, ax1 = plt.subplots(figsize=(10, 4))
             
-            # 뉴스 트렌드 선 그래프
             ax1.plot(subset['Date_Parsed'], subset['Count'], 
                      marker='o', markersize=4, color='#1f77b4', label='뉴스 빈도')
             
-            # 생기부 기록 시점 (빨간선) 표시
-            if kw in STUDENT_RECORDS:
-                record_date = pd.to_datetime(STUDENT_RECORDS[kw])
+            matched_records = []
+            
+            if current_kw_tag is not None:
+                tag_matches = target_student_df[target_student_df['tag'] == current_kw_tag]
                 
-                # 그래프 X축 범위 자동 조정 (생기부 날짜가 그래프 범위를 벗어날 경우 대비)
-                min_date = min(subset['Date_Parsed'].min(), record_date)
-                max_date = max(subset['Date_Parsed'].max(), record_date)
-                # 여유 공간 추가 (7일 정도)
-                ax1.set_xlim(min_date - pd.Timedelta(days=15), max_date + pd.Timedelta(days=15))
+                for _, record in tag_matches.iterrows():
+                    student_year = record['Year']
+                    
+                    if student_year == keyword_year or student_year == keyword_year + 1:
+                        record_date = record['Date_Parsed']
+                        s_name = record['StudentName']
+                        
+                        curr_xlim = ax1.get_xlim()
+                        rec_date_num = mdates.date2num(record_date)
+                        if rec_date_num < curr_xlim[0]: ax1.set_xlim(left=record_date - pd.Timedelta(days=30))
+                        if rec_date_num > curr_xlim[1]: ax1.set_xlim(right=record_date + pd.Timedelta(days=30))
 
-                # 수직선
-                ax1.axvline(x=record_date, color='red', linestyle='--', linewidth=1.5, label='생기부 기록')
-                # 별 마커
-                ax1.scatter([record_date], [subset['Count'].max() * 0.5], color='red', s=150, marker='*', zorder=5)
-                # 텍스트
-                ax1.text(record_date, subset['Count'].max() * 0.55, " 생기부", color='red', fontweight='bold')
+                        ax1.axvline(x=record_date, color='red', linestyle='--', alpha=0.5)
+                        ax1.scatter([record_date], [subset['Count'].max() * 0.5], 
+                                    color='red', s=100, marker='*', zorder=5)
+                        
+                        label_text = f"[{s_name}] {record['Activity']}"
+                        ax1.text(record_date, subset['Count'].max() * 0.6, 
+                                 label_text, color='red', fontsize=9, rotation=45)
+                        
+                        matched_records.append(record)
 
-            # 그래프 스타일링
-            ax1.set_title(f"'{kw}' 뉴스 트렌드", fontsize=14, fontweight='bold')
-            ax1.set_ylabel('기사 건수')
+            ax1.set_title(f"'{kw}' 트렌드 (Peak: {keyword_year})", fontsize=14, fontweight='bold')
             ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
             ax1.grid(True, linestyle='--', alpha=0.3)
-            ax1.legend()
-            
+            ax1.legend(loc='upper left')
             st.pyplot(fig)
             
         with col2:
-            # 통계 요약 카드
-            max_val = subset['Count'].max()
-            peak_date = subset.loc[subset['Count'].idxmax(), 'Date_Parsed']
-            dept_name = subset.iloc[0]['Department']
-            
             st.subheader(f"📌 {kw}")
-            st.write(f"**관련 학과:** {dept_name}")
-            st.write(f"**최고 화제:** {peak_date.strftime('%Y년 %m월')}")
-            st.write(f"**최대 기사:** {int(max_val)}건")
+            tag_display = current_kw_tag if current_kw_tag else "(태그 없음)"
+            st.write(f"**태그:** {tag_display}")
             
-            if kw in STUDENT_RECORDS:
-                rec_date = pd.to_datetime(STUDENT_RECORDS[kw])
-                diff_days = (rec_date - peak_date).days
-                lag_months = round(diff_days / 30, 1)
-                
-                if diff_days > 0:
-                    st.success(f"⏱️ **시차: +{lag_months}개월**\n(뉴스 후 반영됨)")
-                else:
-                    st.warning(f"⏱️ **시차: {lag_months}개월**\n(동시/사전 반영)")
+            if matched_records:
+                st.success(f"✅ {len(matched_records)}건 매칭됨")
+                for rec in matched_records:
+                    with st.expander(f"[{rec['StudentName']}] {rec['Activity']}", expanded=True):
+                        # 날짜 표시 포맷도 보기 좋게 변경
+                        date_display = rec['Date_Parsed'].strftime('%Y-%m-%d') if pd.notnull(rec['Date_Parsed']) else rec['Date']
+                        st.caption(f"{date_display}")
+                        st.write(f"{rec['Content']}")
             else:
-                st.info("생기부 데이터 없음")
+                if current_kw_tag is None:
+                    st.caption("키워드에 설정된 태그가 없어 매칭하지 않습니다.")
+                else:
+                    st.info("조건(태그+연도)에 맞는 활동이 없습니다.")
 
-    # (4) 하단에 전체 통합 데이터 테이블 (접기)
-    with st.expander("💾 통합 데이터 원본 보기"):
-        st.dataframe(category_df.sort_values(['Keyword', 'Date_Parsed']))
-
-else:
-    st.error("불러올 데이터 파일이 없습니다. 폴더에 csv 파일들이 있는지 확인해주세요.")
+    with st.expander("📂 로드된 전체 생기부 데이터 확인"):
+        st.dataframe(student_df)
