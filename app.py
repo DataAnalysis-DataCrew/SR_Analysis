@@ -4,17 +4,18 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import glob
 import os
+import seaborn as sns # 처음 실행 시 pip install seaborn
 
 # ---------------------------------------------------------
-# 1. 기본 설정 및 한글 폰트
+# 1. 기본 설정 및 폰트
 # ---------------------------------------------------------
 st.set_page_config(page_title="학과별 생기부 트렌드 매칭 분석", layout="wide")
 
-# 한글 폰트 설정 (Mac/Windows 호환)
+# 한글 폰트 설정
 try:
-    plt.rcParams['font.family'] = 'Malgun Gothic'
+    plt.rcParams['font.family'] = 'Malgun Gothic'  # Windows
 except:
-    plt.rcParams['font.family'] = 'AppleGothic'
+    plt.rcParams['font.family'] = 'AppleGothic'    # Mac
 plt.rcParams['axes.unicode_minus'] = False
 
 # ---------------------------------------------------------
@@ -24,27 +25,26 @@ plt.rcParams['axes.unicode_minus'] = False
 @st.cache_data
 def load_keyword_data():
     """
-    폴더 내의 '*년 키워드.csv' 파일들을 모두 읽어 통합합니다.
+    과거 트렌드 데이터 로드
     """
-    # 현재 폴더 및 하위 데이터 폴더 검색
     files = glob.glob("*년 키워드.csv") + glob.glob("data/keyword/*년 키워드.csv")
-    
     all_dfs = []
     for filename in files:
+        if "25년도 트랜드" in filename:
+            continue
+            
         try:
             df = pd.read_csv(filename)
-            # 날짜 파싱 (다양한 포맷 대응)
             def parse_date(date_str):
                 for fmt in ['%y-%b', '%b-%y', '%Y-%m', '%Y.%m']:
                     try: return pd.to_datetime(date_str, format=fmt)
                     except: continue
                 return pd.NaT
-
             df['Date_Parsed'] = df['Date'].apply(parse_date)
             df = df.dropna(subset=['Date_Parsed'])
             all_dfs.append(df)
-        except Exception as e:
-            st.error(f"키워드 파일 로드 중 오류 발생 ({filename}): {e}")
+        except Exception:
+            continue
             
     if all_dfs:
         return pd.concat(all_dfs, ignore_index=True)
@@ -54,23 +54,47 @@ def load_keyword_data():
 @st.cache_data
 def load_student_summary():
     """
-    '생기부 정리.csv' 파일을 로드합니다.
+    생기부 요약 데이터 로드
     """
-    # 파일 경로 (필요시 경로 수정)
-    file_path = "생기부 정리.csv"
+    file_path = "data/shcool_record/생기부 정리.csv"
     try:
         if os.path.exists(file_path):
-            df = pd.read_csv(file_path)
-            return df
+            return pd.read_csv(file_path)
         else:
             return pd.DataFrame()
     except Exception as e:
         st.error(f"생기부 데이터 로드 실패: {e}")
         return pd.DataFrame()
 
-# 데이터 로드
+@st.cache_data
+def load_2025_trend():
+    """
+    2025년도 트렌드 데이터 로드
+    """
+    file_path = "data/keyword/25년도 트랜드.csv"
+    try:
+        if os.path.exists(file_path):
+            df = pd.read_csv(file_path)
+            
+            def parse_date(date_str):
+                for fmt in ['%b-%y', '%y-%b', '%Y-%m', '%Y.%m']: 
+                    try: return pd.to_datetime(date_str, format=fmt)
+                    except: continue
+                return pd.NaT
+            
+            df['Date_Parsed'] = df['Date'].apply(parse_date)
+            df = df.dropna(subset=['Date_Parsed'])
+            return df
+        else:
+            return pd.DataFrame()
+    except Exception as e:
+        st.error(f"2025 트렌드 데이터 로드 실패: {e}")
+        return pd.DataFrame()
+
+# 데이터 로드 실행
 keyword_df = load_keyword_data()
 student_df = load_student_summary()
+trend_2025_df = load_2025_trend()
 
 # ---------------------------------------------------------
 # 3. 메인 앱 로직
@@ -78,17 +102,16 @@ student_df = load_student_summary()
 st.title("📈 학과별 뉴스 키워드 트렌드 & 생기부 매칭 분석")
 st.markdown("---")
 
-if keyword_df.empty:
-    st.error("❌ 키워드 데이터 파일(*년 키워드.csv)을 찾을 수 없습니다.")
+if keyword_df.empty and trend_2025_df.empty:
+    st.error("❌ 키워드 데이터 파일들을 찾을 수 없습니다.")
 elif student_df.empty:
     st.error("❌ '생기부 정리.csv' 파일을 찾을 수 없습니다.")
 else:
     # -----------------------------------------------------
-    # 3.1. 사이드바 옵션 (학과 선택만 남김)
+    # 3.1. 사이드바 옵션
     # -----------------------------------------------------
     st.sidebar.header("🔍 분석 옵션")
     
-    # 학과 목록 추출 및 선택
     if 'dept_name' in student_df.columns:
         dept_list = sorted(student_df['dept_name'].unique().astype(str))
         selected_dept = st.sidebar.selectbox("학과 선택 (Department)", dept_list)
@@ -99,10 +122,9 @@ else:
     # -----------------------------------------------------
     # 3.2. 데이터 필터링 및 통계 계산
     # -----------------------------------------------------
-    # 선택한 학과의 생기부 데이터 필터링
     target_student_df = student_df[student_df['dept_name'] == selected_dept].copy()
     
-    # 평균 시차 계산 (선택된 학과 전체 기준, 유효 데이터만)
+    # 이상치 제외 (0~2년)
     valid_lags = target_student_df[(target_student_df['time_lag'] >= 0) & (target_student_df['time_lag'] <= 2)]
     if not valid_lags.empty:
         avg_lag = valid_lags['time_lag'].mean()
@@ -110,64 +132,50 @@ else:
     else:
         avg_lag_text = "데이터 없음"
 
-    # 상단 요약 정보 표시
     col1, col2 = st.columns(2)
     col1.metric("선택된 학과", selected_dept)
-    col2.metric("평균 반응 시차 (Lag)", avg_lag_text, help="뉴스가 발생한 후 생기부에 기록되기까지 걸린 평균 시간 (0~2년 데이터 기준)")
+    col2.metric("평균 반응 시차 (Lag)", avg_lag_text, help="뉴스가 발생한 후 생기부에 기록되기까지 걸린 평균 시간")
 
     st.markdown("---")
 
     # -----------------------------------------------------
-    # 3.3. 키워드별 그래프 그리기 (매칭된 키워드만 표시)
+    # 3.3. 과거 키워드별 그래프 (매칭된 키워드)
     # -----------------------------------------------------
-    
-    # 이 학과 학생들이 활동한 키워드 목록 추출 (중복 제거)
     matched_keywords = target_student_df['matched_keyword'].unique()
     
     if len(matched_keywords) == 0:
-        st.warning(f"'{selected_dept}' 학과 데이터에서 매칭된 키워드를 찾을 수 없습니다.")
+        st.warning(f"'{selected_dept}' 학과 데이터에서 매칭된 과거 키워드 기록을 찾을 수 없습니다.")
     else:
-        st.subheader(f"📊 {selected_dept} 관련 주요 이슈 트렌드")
+        st.subheader(f"📊 {selected_dept} 관련 주요 이슈 트렌드 (과거 분석)")
         
-        # 키워드 순회 (매칭된 것만)
         for kw in matched_keywords:
-            # 해당 키워드의 뉴스 트렌드 데이터 조회
             kw_trend = keyword_df[keyword_df['Keyword'] == kw].sort_values('Date_Parsed')
             
-            # 뉴스 데이터가 없는 경우 스킵
             if kw_trend.empty:
                 continue
                 
-            # 해당 키워드와 매칭되는 학생 활동 데이터
             matched_activities = target_student_df[target_student_df['matched_keyword'] == kw]
             
-            # 활동 데이터가 없으면 스킵
             if matched_activities.empty:
                 continue
             
-            # 레이아웃: 그래프(3) + 설명(1)
             g_col1, g_col2 = st.columns([3, 1])
             
             with g_col1:
                 fig, ax = plt.subplots(figsize=(10, 4))
                 
-                # 1) 뉴스 트렌드 선 그래프
+                # 1) 뉴스 트렌드 라인
                 ax.plot(kw_trend['Date_Parsed'], kw_trend['Count'], 
                         color='#1f77b4', marker='o', markersize=3, label='뉴스 언급량')
                 
-                # 2) 생기부 활동 시점 평균 점 표시 (Average Point)
-                # 활동 연도의 평균 계산 (예: 2020, 2021 -> 평균 2020.5년)
+                # 2) 평균 활동 시점 계산
                 avg_activity_year = matched_activities['activity_year'].mean()
                 avg_time_lag = matched_activities['time_lag'].mean()
                 
-                # 평균 연도를 날짜 형식으로 변환 (해당 연도 1월 1일 + 오차일수)
                 base_year = int(avg_activity_year)
                 days_offset = int((avg_activity_year - base_year) * 365)
-                # 시각적으로 보기 좋게 해당 연도의 중간쯤에 찍히도록 7월 1일 기준 보정 가능하나, 
-                # 여기서는 수학적 평균 날짜로 변환합니다.
-                avg_plot_date = pd.to_datetime(f"{base_year}-01-01") + pd.Timedelta(days=days_offset)
+                avg_plot_date = pd.to_datetime(f"{base_year}-11-01") + pd.Timedelta(days=days_offset)
                 
-                # 뉴스 빈도 최대값의 50% 높이에 점 표시
                 y_max = kw_trend['Count'].max()
                 if pd.isna(y_max) or y_max == 0: y_max = 10
                 
@@ -175,7 +183,7 @@ else:
                 ax.scatter([avg_plot_date], [y_max * 0.5],
                            color='red', s=200, marker='*', zorder=5, label='평균 활동 시점')
                 
-                # 텍스트 라벨 (평균 시차 정보)
+                # 텍스트 라벨
                 label_text = f"평균 시차: {avg_time_lag:.1f}년\n(활동수: {len(matched_activities)}건)"
                 ax.text(avg_plot_date, y_max * 0.58, 
                         label_text, 
@@ -194,13 +202,126 @@ else:
                 st.write(f"**평균 활동 연도:** {avg_activity_year:.1f}년")
                 st.write(f"**평균 반응 시차:** {avg_time_lag:.2f}년 후")
                 
-                # 개별 활동 내역은 확장해서 볼 수 있도록 숨김 처리
                 with st.expander("세부 활동 내역 보기"):
                     for _, row in matched_activities.iterrows():
                         st.caption(f"[{row['student_id']}] {row['activity_year']}년 (Lag {row['time_lag']}년)")
                         context_text = str(row['context'])
-                        # 내용이 너무 길면 자름
                         if len(context_text) > 80: context_text = context_text[:80] + "..."
                         st.write(f"- {context_text}")
             
             st.divider()
+
+    # -----------------------------------------------------
+    # 4. 2025년도 학과별 트렌드 및 활동 예측
+    # -----------------------------------------------------
+    st.markdown("---")
+    st.header(f"📅 2025년도 {selected_dept} 키워드 트렌드 및 예상 활동 시점")
+    
+    if trend_2025_df.empty:
+        st.info("2025년도 트렌드 데이터가 없습니다.")
+    else:
+        # 데이터 필터링
+        trend_2025_df['Department'] = trend_2025_df['Department'].astype(str).str.strip()
+        dept_trend = trend_2025_df[trend_2025_df['Department'] == selected_dept].copy()
+        
+        if dept_trend.empty:
+            st.warning(f"'{selected_dept}' 학과에 해당하는 2025년 데이터가 없습니다.")
+        else:
+            dept_trend = dept_trend.sort_values('Date_Parsed')
+            
+            # 그래프 생성
+            fig2, ax2 = plt.subplots(figsize=(12, 6))
+            
+            keywords_2025 = dept_trend['Keyword'].unique()
+            colors = sns.color_palette("husl", len(keywords_2025))
+            
+            for i, kw in enumerate(keywords_2025):
+                subset = dept_trend[dept_trend['Keyword'] == kw]
+                ax2.plot(subset['Date_Parsed'], subset['Count'], 
+                         marker='o', linestyle='-', linewidth=2, markersize=6,
+                         color=colors[i], label=kw)
+            
+            # 전략 가이드 생성을 위한 변수 초기화
+            predicted_date = None
+            avg_lag_years = 0
+            
+            # -------------------------------------------------
+            # 트렌드 중심 및 예상 활동 시점 계산
+            # -------------------------------------------------
+            if not target_student_df.empty and not dept_trend.empty:
+                
+                # A. 과거 데이터 기반 평균 반응 시차 계산
+                valid_lags = target_student_df[
+                    (target_student_df['time_lag'] >= 0) & 
+                    (target_student_df['time_lag'] <= 5)
+                ]
+                
+                if not valid_lags.empty:
+                    avg_lag_years = valid_lags['time_lag'].mean()
+                    
+                    # B. 트렌드 가중 평균 날짜 계산 (Overflow 방지를 위한 상대 시간 계산)
+                    min_date = dept_trend['Date_Parsed'].min()
+                    weights = dept_trend['Count'].values
+                    
+                    if weights.sum() > 0:
+                        # 기준일로부터 경과한 초(Seconds) 단위로 변환 후 가중 평균
+                        time_deltas_sec = (dept_trend['Date_Parsed'] - min_date).dt.total_seconds()
+                        avg_delta_sec = (time_deltas_sec * weights).sum() / weights.sum()
+                        
+                        # 트렌드 중심 날짜 복원
+                        trend_center_date = min_date + pd.Timedelta(seconds=avg_delta_sec)
+                        
+                        # C. 최종 예상 활동 시점 도출
+                        days_lag = int(avg_lag_years * 365)
+                        predicted_date = trend_center_date + pd.Timedelta(days=days_lag)
+                        
+                        # D. 시각화 (별표 표시)
+                        y_max_2025 = dept_trend['Count'].max()
+                        if pd.isna(y_max_2025) or y_max_2025 == 0: y_max_2025 = 10
+                        
+                        ax2.scatter([predicted_date], [y_max_2025 * 0.5], 
+                                    color='red', s=250, marker='*', zorder=10, 
+                                    label=f'예상 활동 (Lag {avg_lag_years:.1f}년)', 
+                                    edgecolors='white', linewidth=1.5)
+                        
+                        date_str = predicted_date.strftime('%Y년 %m월')
+                        label_text = f"트렌드 중심: {trend_center_date.strftime('%m/%d')}\n+ 시차 {avg_lag_years:.1f}년\n⬇\n예상: {date_str}"
+                        
+                        ax2.text(predicted_date, y_max_2025 * 0.60, 
+                                 label_text, 
+                                 color='red', fontsize=10, ha='center', fontweight='bold',
+                                 bbox=dict(facecolor='white', alpha=0.9, edgecolor='red', boxstyle='round,pad=0.3'))
+                
+            # 그래프 데코레이션
+            ax2.set_title(f"2025년 {selected_dept} 트렌드 기반 예상 활동 시점", fontsize=16, fontweight='bold')
+            ax2.set_xlabel("날짜 (2025년 ~)", fontsize=12)
+            ax2.set_ylabel("검색량 / 언급량", fontsize=12)
+            ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            ax2.grid(True, linestyle='--', alpha=0.5)
+            
+            ax2.xaxis.set_major_formatter(mdates.DateFormatter('%y-%m'))
+            ax2.xaxis.set_major_locator(mdates.MonthLocator())
+            plt.xticks(rotation=45)
+            
+            st.pyplot(fig2)
+
+            # -------------------------------------------------
+            # 맞춤형 전략 가이드 출력
+            # -------------------------------------------------
+            if predicted_date is not None:
+                top_keyword = dept_trend.groupby('Keyword')['Count'].sum().idxmax()
+                rec_date_str = predicted_date.strftime('%Y년 %m월')
+                
+                st.success(f"""
+                ### 🚀 **{selected_dept} 맞춤 전략 가이드**
+                
+                **{top_keyword}**에 대한 심화 탐구(세특) 내용을  
+                👉 **{rec_date_str}** 쯤에 작성하여 제출하는 것을 추천합니다.
+                
+                ---
+                * **이유:** {selected_dept} 선배들의 과거 데이터를 분석했을 때, 사회적 이슈가 발생한 후 평균 **약 {avg_lag_years:.1f}년** 뒤에 생기부에 기록되는 패턴이 있습니다.  
+                * 남들보다 빠르거나 늦지 않게, 학과 특성에 맞는 **최적의 타이밍**을 선점하세요!
+                """)
+                
+            with st.expander("데이터 상세 보기"):
+                st.dataframe(dept_trend[['Date', 'Keyword', 'Category', 'Count']])
