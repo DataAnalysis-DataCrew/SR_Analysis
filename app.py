@@ -247,7 +247,6 @@ else:
             
             # -------------------------------------------------
             # 트렌드 중심 및 예상 활동 시점 계산
-            # -------------------------------------------------
             if not target_student_df.empty and not dept_trend.empty:
                 
                 # A. 과거 데이터 기반 평균 반응 시차 계산
@@ -259,39 +258,39 @@ else:
                 if not valid_lags.empty:
                     avg_lag_years = valid_lags['time_lag'].mean()
                     
-                    # B. 트렌드 가중 평균 날짜 계산 (Overflow 방지를 위한 상대 시간 계산)
-                    min_date = dept_trend['Date_Parsed'].min()
-                    weights = dept_trend['Count'].values
+                    # 1. 예상 활동 연도 계산 (2025년 + 평균 시차)
+                    target_year_float = 2025 + avg_lag_years
                     
-                    if weights.sum() > 0:
-                        # 기준일로부터 경과한 초(Seconds) 단위로 변환 후 가중 평균
-                        time_deltas_sec = (dept_trend['Date_Parsed'] - min_date).dt.total_seconds()
-                        avg_delta_sec = (time_deltas_sec * weights).sum() / weights.sum()
-                        
-                        # 트렌드 중심 날짜 복원
-                        trend_center_date = min_date + pd.Timedelta(seconds=avg_delta_sec)
-                        
-                        # C. 최종 예상 활동 시점 도출
-                        days_lag = int(avg_lag_years * 365)
-                        predicted_date = trend_center_date + pd.Timedelta(days=days_lag)
-                        
-                        # D. 시각화 (별표 표시)
-                        y_max_2025 = dept_trend['Count'].max()
-                        if pd.isna(y_max_2025) or y_max_2025 == 0: y_max_2025 = 10
-                        
-                        ax2.scatter([predicted_date], [y_max_2025 * 0.5], 
-                                    color='red', s=250, marker='*', zorder=10, 
-                                    label=f'예상 활동 (Lag {avg_lag_years:.1f}년)', 
-                                    edgecolors='white', linewidth=1.5)
-                        
-                        date_str = predicted_date.strftime('%Y년 %m월')
-                        label_text = f"트렌드 중심: {trend_center_date.strftime('%m/%d')}\n+ 시차 {avg_lag_years:.1f}년\n⬇\n예상: {date_str}"
-                        
-                        ax2.text(predicted_date, y_max_2025 * 0.60, 
-                                 label_text, 
-                                 color='red', fontsize=10, ha='center', fontweight='bold',
-                                 bbox=dict(facecolor='white', alpha=0.9, edgecolor='red', boxstyle='round,pad=0.3'))
-                
+                    # 2. 연도 정수 부분과 소수 부분 분리
+                    base_year_int = int(target_year_float)      # 예: 2025
+                    fractional_diff = target_year_float - base_year_int # 예: 0.0 or 0.5
+                    
+                    # 3. 해당 연도의 11월 1일 기준 설정
+                    base_date_nov1 = pd.to_datetime(f"{base_year_int}-11-01")
+                    
+                    # 4. 소수점 연도 보정 (시차가 1.5년이면 0.5년치 날짜를 더함)
+                    days_offset = int(fractional_diff * 365)
+                    predicted_date = base_date_nov1 + pd.Timedelta(days=days_offset)
+                    
+                    # -----------------------------------------------------------
+                    # D. 시각화 (별표 표시)
+                    # -----------------------------------------------------------
+                    y_max_2025 = dept_trend['Count'].max()
+                    if pd.isna(y_max_2025) or y_max_2025 == 0: y_max_2025 = 10
+                    
+                    ax2.scatter([predicted_date], [y_max_2025 * 0.5], 
+                                color='red', s=250, marker='*', zorder=10, 
+                                label=f'예상 활동 (Lag {avg_lag_years:.1f}년)', 
+                                edgecolors='white', linewidth=1.5)
+                    
+                    date_str = predicted_date.strftime('%Y년 %m월')
+                    # 텍스트 라벨 내용도 변경
+                    label_text = f"기준점 + 시차 보정\n예상: {date_str}"
+                    
+                    ax2.text(predicted_date, y_max_2025 * 0.60, 
+                             label_text, 
+                             color='red', fontsize=10, ha='center', fontweight='bold',
+                             bbox=dict(facecolor='white', alpha=0.9, edgecolor='red', boxstyle='round,pad=0.3'))
             # 그래프 데코레이션
             ax2.set_title(f"2025년 {selected_dept} 트렌드 기반 예상 활동 시점", fontsize=16, fontweight='bold')
             ax2.set_xlabel("날짜 (2025년 ~)", fontsize=12)
